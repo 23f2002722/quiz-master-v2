@@ -7,7 +7,7 @@ class LocalDevelopmentConfig(Config):
     DEBUG=True
 
     SECRET_KEY="12345"
-    SECURITY+PASSWORD_HASH="bcrypt"
+    SECURITY_PASSWORD_HASH="bcrypt"
     SECURITY_PASSWORD_SALT="12345"
     WTF_CSRF_ENABLED=False
     SECURITY_TOKEN_AUTHENTICATION_HEADER="Authentication-Token"

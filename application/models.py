@@ -1,6 +1,5 @@
 from .database import db
 from datetime import datetime, date, timezone
-from werkzeug.security import generate_password_hash
 from flask_security import UserMixin, RoleMixin
 
 # Users Table - Stores user data
@@ -16,10 +15,10 @@ class User(db.Model, UserMixin):
     fs_uniquifier=db.Column(db.String, unique=True, nullable=False)
     active=db.Column(db.Boolean, nullable=False)
 
-    roles = db.relationship('Role', backref='bearer' secondary='users_roles')
+    roles = db.relationship('Role', backref='bearer', secondary='users_roles')
     scores = db.relationship('Score', backref='user', lazy=True, cascade="all, delete-orphan")
 
-class Role(db.Model, RoleMixin):
+class Role(db.Model, RoleMixin):    
     id=db.Column(db.Integer, primary_key=True)
     name=db.Column(db.String, unique=True, nullable=False)
     description=db.Column(db.String)
@@ -88,19 +87,3 @@ class Score(db.Model):
     __table_args__ = (db.UniqueConstraint('quiz_id', 'user_id', name='unique_user_quiz_attempt'),)
 
 
-
-with app.app_context():
-    db.create_all()
-    admin = User.query.filter_by(role="admin").first()
-    if not admin:
-        password_hash = generate_password_hash("987")
-        admin = User(
-            username="admin@gmail.com",
-            full_name="admin",
-            qualification="Graduation",
-            dob=date(2004,12,16),
-            password_hash=password_hash,
-            role="admin",
-        )
-        db.session.add(admin)
-        db.session.commit()
