@@ -5,7 +5,7 @@ from functools import wraps
 
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import date, datetime, timedelta
-from sqlalchemy import func
+from sqlalchemy import func, or_, and_
 
 #Decorator-Role_Required
 def role_required(required_role):
@@ -20,18 +20,18 @@ def role_required(required_role):
     return wrapper
 
 #Start quiz
-@app.route('/api/user/start_quiz/<int:quiz_id>', methods=['POST']) # Changed to POST
+@app.route('/api/user/start_quiz/<int:quiz_id>', methods=['POST'])
 @jwt_required()
 def start_quiz_api(quiz_id):
     user = current_user
-    quiz = Quiz.query.get(quiz_id) # Use get() as it's by primary key
+    quiz = Quiz.query.get(quiz_id)
 
     if not quiz:
         return jsonify(message="Quiz not found."), 404
 
     existing_score = Score.query.filter_by(user_id=user.id, quiz_id=quiz.id).first()
     if existing_score:
-        return jsonify(message="You have already attempted this quiz!"), 409 # 409 Conflict
+        return jsonify(message="You have already attempted this quiz!"), 409 
 
     questions = Question.query.filter_by(quiz_id=quiz.id).all()
     if not questions:
@@ -46,14 +46,14 @@ def start_quiz_api(quiz_id):
             "option2": q.option2,
             "option3": q.option3,
             "option4": q.option4,
-            "correct_option": q.correct_option # As per original logic, sending this. Be aware of security implications.
+            "correct_option": q.correct_option 
         })
     
     # Prepare initial quiz state data for the frontend
     initial_quiz_state = {
         'quiz_id': quiz.id,
         'user_id': user.id,
-        'time_duration_seconds': quiz.time_duration * 60, # Convert to seconds as per original session logic
+        'time_duration_seconds': quiz.time_duration * 60,
         'questions': questions_data
     }
 
@@ -68,11 +68,10 @@ def start_quiz_api(quiz_id):
 def submit_quiz_api():
     user = current_user
     
-    # Expecting quiz_id and all user_responses from the frontend
     quiz_id = request.json.get('quiz_id')
-    user_responses = request.json.get('responses') # Dictionary: {question_index: selected_option}
-    client_start_time_str = request.json.get('start_time') # Optional: if you want server to validate time
-    client_end_time_str = request.json.get('end_time') # Optional: if you want server to validate time
+    user_responses = request.json.get('responses')
+    client_start_time_str = request.json.get('start_time') 
+    client_end_time_str = request.json.get('end_time') 
 
     if not quiz_id or not user_responses:
         return jsonify(message="Invalid submission: Missing quiz ID or responses."), 400
@@ -81,47 +80,33 @@ def submit_quiz_api():
     if not quiz:
         return jsonify(message="Quiz not found."), 404
 
-    # Optional: Time validation on server side
     if client_start_time_str and client_end_time_str:
         try:
-            # Assuming client sends ISO format or YYYY-MM-DD HH:MM:SS
             client_start_time = datetime.fromisoformat(client_start_time_str) if 'T' in client_start_time_str else datetime.strptime(client_start_time_str, '%Y-%m-%d %H:%M:%S')
             client_end_time = datetime.fromisoformat(client_end_time_str) if 'T' in client_end_time_str else datetime.strptime(client_end_time_str, '%Y-%m-%d %H:%M:%S')
             
             elapsed_time_seconds = (client_end_time - client_start_time).total_seconds()
-            # If quiz.time_duration is in minutes, convert to seconds
             allowed_time_seconds = quiz.time_duration * 60
-            if elapsed_time_seconds > allowed_time_seconds + 5: # Add a small buffer for network latency
-                # return jsonify(message="Quiz submission timed out or took too long."), 403 # Forbidden
-                pass # You might choose to just record, or penalize, or reject.
+            if elapsed_time_seconds > allowed_time_seconds + 5:
+                pass
         except ValueError:
-            # Handle invalid time formats from client
             pass
 
     # Ensure user hasn't already submitted score for this quiz
     existing_score = Score.query.filter_by(user_id=user.id, quiz_id=quiz_id).first()
     if existing_score:
-        return jsonify(message="You have already submitted this quiz."), 409 # Conflict
+        return jsonify(message="You have already submitted this quiz."), 409 
 
     questions = Question.query.filter_by(quiz_id=quiz_id).all()
-    # Create a map for quick lookup: {question_id: Question_object}
-    # This is better than relying on question_index from frontend if questions can be out of order
     question_map = {q.id: q for q in questions} 
 
     total_score = 0
     correct_count = 0
     incorrect_count = 0
     unanswered_count = 0
-    
-    # The original code iterated `enumerate(questions)` and used `responses.get(str(index))`.
-    # This implies `responses` keys were stringified 0-based indices.
-    # If frontend sends {question_id: selected_option}, we need to adapt.
-    # Assuming frontend sends {question_index_as_string: selected_option_string} based on original `responses` structure.
 
-    # Replicate original scoring logic: iterate through all *server-side* questions
-    # and match them with responses from client based on their index (position in original `questions` list)
     for index, question in enumerate(questions):
-        selected_answer_raw = user_responses.get(str(index)) # Get response by its index in the original question list
+        selected_answer_raw = user_responses.get(str(index))
         
         if selected_answer_raw is not None:
             selected_answer = str(selected_answer_raw).strip().lower()
@@ -134,22 +119,6 @@ def submit_quiz_api():
                 incorrect_count += 1
         else:
             unanswered_count += 1
-            
-    # Or, if frontend sends {question_id: selected_option}:
-    # for q_id_str, selected_answer_raw in user_responses.items():
-    #     q_id = int(q_id_str) # Assuming question IDs are sent as strings
-    #     question = question_map.get(q_id)
-    #     if question:
-    #         selected_answer = str(selected_answer_raw).strip().lower()
-    #         correct_answer = str(question.correct_option).strip().lower()
-    #         if selected_answer == correct_answer:
-    #             total_score += 1
-    #             correct_count += 1
-    #         else:
-    #             incorrect_count += 1
-    # # Handle unanswered if iterating by `user_responses`
-    # unanswered_count = len(questions) - len(user_responses)
-
 
     new_score = Score(
         user_id=user.id,
@@ -170,17 +139,16 @@ def submit_quiz_api():
     ), 200
 
 #View score
-@app.route('/api/user/scores', methods=['GET']) # Changed route, no user_id in path for current_user
+@app.route('/api/user/scores', methods=['GET']) 
 @jwt_required()
 def view_scores_api():
-    user = current_user # The user whose scores we are viewing is the logged-in user
-
+    user = current_user 
     # Query scores and join with Quiz and Question to get necessary details
     scores_data = db.session.query(
         Score,
         Quiz,
-        Subject,   # Join Subject to get subject name
-        Chapter    # Join Chapter to get chapter name
+        Subject, 
+        Chapter  
     ).join(
         Quiz, Score.quiz_id == Quiz.id
     ).join(
@@ -262,7 +230,7 @@ def summary_api():
             subject_wise_top_scores=subject_wise_top_scores,
             subject_wise_user_attempts=subject_wise_user_attempts
         ), 200
-    else: # User role
+    else: 
         subject_wise_attempts_raw = db.session.query(
             Subject.name,
             db.func.count(Score.id).label('attempt_count')
@@ -300,7 +268,7 @@ def summary_api():
 @app.route('/api/admin/quiz_analytics/<int:quiz_id>', methods=['GET'])
 @role_required("admin")
 def quiz_analytics_api(quiz_id):
-    current_admin_user = current_user # Renamed to avoid conflict
+    current_admin_user = current_user
 
     quiz = Quiz.query.get(quiz_id)
     if not quiz:
@@ -331,22 +299,14 @@ def quiz_analytics_api(quiz_id):
     total_questions_in_quiz = db.session.query(Question).filter(Question.quiz_id == quiz_id).count()
 
     return jsonify(
-        admin_user_details={
-            "id": current_admin_user.id,
-            "username": current_admin_user.username,
-            "full_name": current_admin_user.full_name,
-            "qualification": current_admin_user.qualification,
-            "dob": current_admin_user.dob.isoformat() if current_admin_user.dob else None,
-            "role": current_admin_user.role
-        },
         quiz_id=quiz_id,
-        quiz_title=quiz.type, # Assuming 'type' field acts as the quiz title or identifier
+        quiz_title=quiz.type, 
         quiz_attempts=quiz_attempts_data,
         total_questions_in_quiz=total_questions_in_quiz
     ), 200
 
 #Profile
-@app.route("/api/profile", methods=["GET", "PUT"]) # Combined GET for fetching and PUT for updating
+@app.route("/api/profile", methods=["GET", "PUT"]) 
 @jwt_required()
 def profile_api():
     user = current_user
@@ -367,7 +327,7 @@ def profile_api():
         current_password = request.json.get("current_password")
         new_password = request.json.get("new_password")
         confirm_password = request.json.get("confirm_password")
-        email = request.json.get("email") # Maps to username in your current model
+        email = request.json.get("email") 
 
         if not current_password or not new_password or not confirm_password:
             return jsonify(message="Please fill out all the required password fields for update."), 400
@@ -378,18 +338,180 @@ def profile_api():
         if new_password != confirm_password:
             return jsonify(message="New passwords do not match."), 400
         
-        # Optional: Add validation for email/username uniqueness if changing email/username
-        # if email and email != user.username:
-        #     existing_user_with_email = User.query.filter_by(username=email).first()
-        #     if existing_user_with_email and existing_user_with_email.id != user.id:
-        #         return jsonify(message="This email/username is already taken."), 409
-
 
         new_password_hash = generate_password_hash(new_password)
         user.full_name = name
         user.password_hash = new_password_hash
-        user.username = email # As per your existing logic
+        user.username = email 
 
         db.session.commit()
 
         return jsonify(message="Profile updated successfully."), 200
+    
+#Search
+@app.route('/api/search', methods=['GET'])
+@jwt_required()
+def search_api():
+    user = current_user
+    category = request.args.get('category')
+    query = request.args.get('query', '').strip()
+
+    if user.role == "admin":
+        if category == "users":
+            users_raw = User.query.filter(
+                and_(
+                    or_(
+                        User.full_name.ilike(f"%{query}%"),
+                        User.username.ilike(f"%{query}%"),
+                        db.func.strftime("%Y-%m-%d", User.dob).ilike(f"%{query}%")
+                    ),
+                    User.role != "admin" 
+                )
+            ).all()
+            
+            users_data = []
+            for user_item in users_raw:
+                users_data.append({
+                    "id": user_item.id,
+                    "username": user_item.username,
+                    "full_name": user_item.full_name,
+                    "qualification": user_item.qualification,
+                    "dob": user_item.dob.isoformat() if user_item.dob else None,
+                    "role": user_item.role,
+                    "created_at": user_item.created_at.isoformat() if user_item.created_at else None
+                })
+            return jsonify(category=category, users=users_data, user_role="admin"), 200
+
+        elif category == "quiz":
+            quizzes_raw = Quiz.query.join(Chapter).join(Subject).filter(
+                or_(
+                    Quiz.type.ilike(f"%{query}%"),
+                    Chapter.name.ilike(f"%{query}%"),
+                    Subject.name.ilike(f"%{query}%")
+                )
+            ).all()
+            
+            quiz_data = []
+            for quiz_item in quizzes_raw:
+                questions_count = db.session.query(Question).filter(Question.quiz_id == quiz_item.id).count()
+                quiz_data.append({
+                    "id": quiz_item.id,
+                    "type": quiz_item.type,
+                    "chapter_id": quiz_item.chapter_id,
+                    "date_of_quiz": quiz_item.date_of_quiz.isoformat() if quiz_item.date_of_quiz else None,
+                    "time_duration": quiz_item.time_duration,
+                    "remarks": quiz_item.remarks,
+                    "chapter_name": quiz_item.chapter.name,
+                    "subject_name": quiz_item.chapter.subject.name,
+                    "questions_count": questions_count
+                })
+            return jsonify(category=category, quizzes=quiz_data, user_role="admin"), 200
+
+        elif category == "chapters":
+            chapters_raw = Chapter.query.join(Subject).filter(
+                Chapter.name.ilike(f"%{query}%")
+            ).all()
+            
+            chapters_data = []
+            for chapter_item in chapters_raw:
+                questions_count = db.session.query(Question).join(Quiz).filter(Quiz.chapter_id == chapter_item.id).count()
+                chapters_data.append({
+                    "id": chapter_item.id,
+                    "name": chapter_item.name,
+                    "description": chapter_item.description,
+                    "subject_name": chapter_item.subject.name,
+                    "questions_count": questions_count
+                })
+            return jsonify(category=category, chapters=chapters_data, user_role="admin"), 200
+
+        elif category == "subjects":
+            subjects_raw = Subject.query.filter(Subject.name.ilike(f"%{query}%")).all()
+            
+            subjects_data = []
+            for subject_item in subjects_raw:
+                subjects_data.append({
+                    "id": subject_item.id,
+                    "name": subject_item.name,
+                    "description": subject_item.description
+                })
+            return jsonify(category=category, subjects=subjects_data, user_role="admin"), 200
+
+        else: 
+            return jsonify(message="Invalid search category for admin."), 400
+
+    else: 
+        if category == "quiz":
+            current_date_obj = date.today()
+            attempted_quiz_ids = db.session.query(Score.quiz_id).filter(Score.user_id == user.id).subquery()
+            
+            quizzes_raw = Quiz.query.join(Chapter).join(Subject).filter(
+                and_(
+                    or_(
+                        Quiz.type.ilike(f"%{query}%"),
+                        Chapter.name.ilike(f"%{query}%"),
+                        Subject.name.ilike(f"%{query}%")
+                    ),
+                    db.func.date(Quiz.date_of_quiz) >= current_date_obj,
+                    ~Quiz.id.in_(attempted_quiz_ids)
+                )
+            ).all()
+
+            quiz_data = []
+            for quiz_item in quizzes_raw:
+                questions_count = db.session.query(Question).filter(Question.quiz_id == quiz_item.id).count()
+                quiz_data.append({
+                    "id": quiz_item.id,
+                    "type": quiz_item.type,
+                    "chapter_id": quiz_item.chapter_id,
+                    "date_of_quiz": quiz_item.date_of_quiz.isoformat() if quiz_item.date_of_quiz else None,
+                    "time_duration": quiz_item.time_duration,
+                    "remarks": quiz_item.remarks,
+                    "chapter_name": quiz_item.chapter.name,
+                    "subject_name": quiz_item.chapter.subject.name,
+                    "questions_count": questions_count
+                })
+            return jsonify(category=category, quizzes=quiz_data, user_role="user"), 200
+
+        elif category == "scores":
+            scores_raw = db.session.query(Score, Quiz, Chapter, Subject)\
+                           .join(Quiz, Score.quiz_id == Quiz.id)\
+                           .join(Chapter, Quiz.chapter_id == Chapter.id)\
+                           .join(Subject, Chapter.subject_id == Subject.id)\
+                           .filter(
+                               and_(
+                                   Score.user_id == user.id,
+                                   or_(
+                                       db.func.strftime("%Y-%m-%d %H:%M:%S", Score.timestamp).ilike(f"%{query}%"), # For timestamp search
+                                       Chapter.name.ilike(f"%{query}%"),
+                                       Quiz.type.ilike(f"%{query}%"),
+                                       Subject.name.ilike(f"%{query}%")
+                                   )
+                               )
+                           ).all()
+            
+            scores_data = []
+            for score_obj, quiz_obj, chapter_obj, subject_obj in scores_raw:
+                total_questions_in_quiz = db.session.query(Question).filter(Question.quiz_id == quiz_obj.id).count()
+                scores_data.append({
+                    "score_id": score_obj.id,
+                    "quiz_id": quiz_obj.id,
+                    "quiz_type": quiz_obj.type,
+                    "quiz_date": quiz_obj.date_of_quiz.isoformat() if quiz_obj.date_of_quiz else None,
+                    "total_score": score_obj.total_score,
+                    "total_questions": total_questions_in_quiz,
+                    "timestamp": score_obj.timestamp.isoformat() if score_obj.timestamp else None,
+                    "chapter_name": chapter_obj.name,
+                    "subject_name": subject_obj.name
+                })
+            return jsonify(category=category, scores=scores_data, user_role="user"), 200
+
+        else: 
+            return jsonify(message="Invalid search category for user."), 400
+    return jsonify(message="Invalid search parameters."), 400
+
+@app.route("/api/admin_contact", methods=["GET"])
+def get_admin_contact_email():
+    admin_user = User.query.filter_by(role="admin").first()
+    if admin_user:
+        return jsonify(admin_email=admin_user.username), 200 
+    return jsonify(admin_email="contact@quizmaster.com"), 200 

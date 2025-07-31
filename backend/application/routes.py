@@ -6,6 +6,7 @@ from functools import wraps
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import date
 from sqlalchemy import and_
+from .cache import cache_response
 
 #Decorator-Role_Required
 def role_required(required_role):
@@ -26,19 +27,23 @@ def index():
     password=request.json.get("password", None)
 
     if not username or not password:
-        return jsonify("Please fill in all fields."), 400
+        return jsonify(message="Please fill in all fields."), 400
         
     user = User.query.filter_by(username=username).first()
 
     if not user:
-        return jsonify("User not fond."), 401
+        return jsonify(message="User not found."), 401
         
     if not check_password_hash(user.password_hash, password):
-        return jsonify("Incorrect password."), 401
+        return jsonify(message="Incorrect password."), 401
 
-    access_token = create_access_token(identity=user)
-    return jsonify(access_token=access_token,
-                    message="Login Successful!"), 200
+    access_token = create_access_token(identity=str(user.id))
+    return jsonify(
+        access_token=access_token,
+        message="Login Successful!",
+        user_role=user.role,
+        full_name=user.full_name
+    ), 200
 
 #Registration route
 @app.route("/api/register_user", methods=["GET", "POST"])
@@ -130,6 +135,7 @@ def dashboard_api():
                 "id": chapter.id,
                 "name": chapter.name,
                 "description": chapter.description,
+                "subject_id": chapter.subject_id,
                 "subject_name": chapter.subject.name,
                 "questions_count": questions_count
             })
@@ -187,7 +193,7 @@ def add_chapter_api(subject_id):
     chapter = Chapter(name=name, description=description, subject_id=subject_id)
     db.session.add(chapter)
     db.session.commit()
-    return jsonify(message="Chapter added successfully.", chapter_id=chapter.id), 201
+    return jsonify(message="Chapter added successfully.", chapter={"id": chapter.id, "name": chapter.name, "description": chapter.description, "subject_id": chapter.subject_id}), 201
 
 #Edit chapter
 @app.route("/api/admin/edit_chapter/<int:chapter_id>", methods=["PUT"])
@@ -209,6 +215,22 @@ def edit_chapter_api(chapter_id):
     db.session.commit()
     return jsonify(message="Chapter updated successfully."), 200
 
+@app.route("/api/admin/chapters/<int:chapter_id>", methods=["GET"])
+@role_required("admin")
+def get_chapter_details_api(chapter_id):
+    chapter = Chapter.query.filter_by(id=chapter_id).first()
+
+    if not chapter:
+        return jsonify(message="Chapter not found."), 404
+
+    return jsonify(
+        id=chapter.id,
+        name=chapter.name,
+        description=chapter.description,
+        subject_id=chapter.subject_id,
+        subject_name=chapter.subject.name 
+    ), 200
+
 #Delete chapter
 @app.route("/api/admin/delete_chapter/<int:chapter_id>", methods=["DELETE"])
 @role_required("admin")
@@ -228,20 +250,28 @@ def delete_chapter_api(chapter_id):
 def quiz_management_api():
     user = current_user
     quizzes = db.session.query(Quiz).all()
-
     quiz_data = []
-    for quiz in quizzes:
-        questions_count = db.session.query(Question).filter(Question.quiz_id == quiz.id).count()
+    for quiz_item in quizzes:
+        questions_raw = db.session.query(Question).filter(Question.quiz_id == quiz_item.id).all()
+        questions_list = []
+        for q in questions_raw:
+            questions_list.append({
+                "id": q.id,
+                "question_statement": q.question_statement,
+            })
+        
         quiz_data.append({
-            "id": quiz.id,
-            "type": quiz.type,
-            "chapter_id": quiz.chapter_id,
-            "date_of_quiz": quiz.date_of_quiz.isoformat() if quiz.date_of_quiz else None,
-            "time_duration": quiz.time_duration,
-            "remarks": quiz.remarks,
-            "chapter_name": quiz.chapter.name,
-            "subject_name": quiz.chapter.subject.name,
-            "questions_count": questions_count
+            "id": quiz_item.id,
+            "type": quiz_item.type,
+            "chapter_id": quiz_item.chapter_id,
+            "date_of_quiz": quiz_item.date_of_quiz.isoformat() if quiz_item.date_of_quiz else None,
+            "time_duration": quiz_item.time_duration,
+            "remarks": quiz_item.remarks,
+            "chapter_name": quiz_item.chapter.name,
+            "chapter_description": quiz_item.chapter.description, 
+            "subject_name": quiz_item.chapter.subject.name,
+            "questions_count": len(questions_list), 
+            "questions": questions_list 
         })
 
     return jsonify(
@@ -267,7 +297,7 @@ def chapterwise_quiz_api(chapter_id):
         return jsonify(message="No quizzes found for this chapter."), 404
 
     quiz_data = []
-    for quiz_item in quizzes: # Renamed 'quiz' to 'quiz_item' to avoid conflict with the Quiz model name
+    for quiz_item in quizzes: 
         questions_count = db.session.query(Question).filter(Question.quiz_id == quiz_item.id).count()
         quiz_data.append({
             "id": quiz_item.id,
@@ -315,9 +345,7 @@ def add_quiz_api():
     except ValueError:
         return jsonify(message="Invalid duration. Please enter a valid number greater than zero."), 400
 
-    # Parse date to proper formats
     try:
-        # datetime.strptime returns a datetime object, which is compatible with db.DateTime
         parsed_date_of_quiz = datetime.strptime(date_of_quiz, "%Y-%m-%d")
     except ValueError:
         return jsonify(message="Invalid date format. Use YYYY-MM-DD."), 400
@@ -332,6 +360,19 @@ def add_quiz_api():
     db.session.add(quiz)
     db.session.commit()
     return jsonify(message="Quiz added successfully.", quiz_id=quiz.id), 201
+
+@app.route("/api/admin/chapters_list_all", methods=["GET"])
+@role_required("admin")
+def get_chapters_list_all_api():
+    chapters = Chapter.query.all()
+    chapters_data = []
+    for chapter in chapters:
+        chapters_data.append({
+            "id": chapter.id,
+            "name": chapter.name,
+            "description": chapter.description
+        })
+    return jsonify(chapters=chapters_data), 200
 
 #Delete quiz
 @app.route("/api/admin/delete_quiz/<int:quiz_id>", methods=["DELETE"])
@@ -375,6 +416,25 @@ def add_question_api(quiz_id):
 
     return jsonify(message='Question added successfully!', question_id=new_question.id), 201
 
+@app.route("/api/admin/quiz_details_for_question_add/<int:quiz_id>", methods=["GET"])
+@role_required("admin")
+def quiz_details_for_question_add_api(quiz_id):
+    quiz = Quiz.query.filter_by(id=quiz_id).first()
+
+    if not quiz:
+        return jsonify(message="Quiz not found."), 404
+
+    chapter_name = quiz.chapter.name if quiz.chapter else "N/A"
+    
+    question_count = db.session.query(Question).filter(Question.quiz_id == quiz_id).count()
+
+    return jsonify(
+        quiz_id=quiz.id,
+        quiz_type=quiz.type,
+        chapter_name=chapter_name,
+        question_count=question_count + 1
+    ), 200
+
 #Edit question
 @app.route("/api/admin/edit_question/<int:question_id>", methods=["PUT"])
 @role_required("admin")
@@ -404,6 +464,25 @@ def edit_question_api(question_id):
     db.session.commit()
 
     return jsonify(message='Question updated successfully!'), 200
+
+@app.route("/api/admin/questions/<int:question_id>", methods=["GET"])
+@role_required("admin")
+def get_question_details_api(question_id):
+    question = Question.query.filter_by(id=question_id).first()
+
+    if not question:
+        return jsonify(message="Question not found."), 404
+
+    return jsonify(
+        id=question.id,
+        quiz_id=question.quiz_id,
+        question_statement=question.question_statement,
+        option1=question.option1,
+        option2=question.option2,
+        option3=question.option3,
+        option4=question.option4,
+        correct_option=question.correct_option
+    ), 200
 
 #Delete question
 @app.route("/api/admin/delete_question/<int:question_id>", methods=["DELETE"])
@@ -437,16 +516,7 @@ def show_users_api():
             "created_at": user_item.created_at.isoformat() if user_item.created_at else None
         })
     
-    return jsonify(
-        admin_user_details={
-            "id": current_admin_user.id,
-            "username": current_admin_user.username,
-            "full_name": current_admin_user.full_name,
-            "qualification": current_admin_user.qualification,
-            "dob": current_admin_user.dob.isoformat() if current_admin_user.dob else None,
-            "role": current_admin_user.role
-        },
-        users=users_data
+    return jsonify(users=users_data
     ), 200
 
 #Delete User
@@ -461,6 +531,43 @@ def delete_user_api(id):
     db.session.delete(user)
     db.session.commit()
     return jsonify(message="User deleted successfully."), 200
+
+
+
+# Async Export APIs
+from celery.result import AsyncResult
+from .tasks import export_user_quizzes_csv, export_admin_overview_csv
+
+@app.route("/api/user/export_csv", methods=["POST"])
+@role_required("user")
+def export_user_csv_api():
+    task = export_user_quizzes_csv.delay(current_user.id)
+    return jsonify(task_id=task.id, message="Export started."), 202
+
+@app.route("/api/admin/export_csv", methods=["POST"])
+@role_required("admin")
+def export_admin_csv_api():
+    task = export_admin_overview_csv.delay()
+    return jsonify(task_id=task.id, message="Export started."), 202
+
+@app.route("/api/task_status/<task_id>", methods=["GET"])
+@jwt_required()
+def task_status_api(task_id):
+    res = AsyncResult(task_id)
+    data = {"id": task_id, "state": res.state}
+    if res.state == "SUCCESS":
+        data["result"] = res.result
+    return jsonify(data), 200
+
+@app.route("/api/exports", methods=["GET"])
+@jwt_required()
+def list_exports_api():
+    import os, glob
+    base = os.path.join(os.path.dirname(__file__), "..", "exports")
+    base = os.path.abspath(base)
+    os.makedirs(base, exist_ok=True)
+    files = sorted(glob.glob(os.path.join(base, "*.csv")), reverse=True)[:20]
+    return jsonify(files=files), 200
 
 #Logout
 @app.route("/api/logout", methods=["POST"])

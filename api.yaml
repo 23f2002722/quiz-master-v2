@@ -1,0 +1,150 @@
+openapi: 3.0.3
+info:
+  title: Quiz Management API
+  description: REST API for managing quizzes, users, and reports in the Quiz Management System.
+  version: 1.0.0
+
+servers:
+  - url: http://localhost:5000/api
+    description: Local development server
+
+tags:
+  - name: Users
+  - name: Quizzes
+  - name: Scores
+  - name: Reports
+
+paths:
+  /register:
+    post:
+      tags: [Users]
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password, full_name]
+              properties:
+                username: { type: string }
+                password: { type: string }
+                full_name: { type: string }
+      responses:
+        '201':
+          description: User created
+
+  /login:
+    post:
+      tags: [Users]
+      summary: Authenticate user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: { type: string }
+                password: { type: string }
+      responses:
+        '200':
+          description: Login successful
+
+  /quiz:
+    post:
+      tags: [Quizzes]
+      summary: Create a new quiz
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [type, chapter_id, date_of_quiz]
+              properties:
+                type: { type: string }
+                chapter_id: { type: integer }
+                date_of_quiz: { type: string, format: date }
+                time_duration: { type: integer }
+                remarks: { type: string }
+      responses:
+        '201':
+          description: Quiz created
+
+    get:
+      tags: [Quizzes]
+      summary: Get all quizzes
+      responses:
+        '200':
+          description: List of quizzes
+
+  /quiz/{quiz_id}/submit:
+    post:
+      tags: [Scores]
+      summary: Submit quiz answers
+      parameters:
+        - name: quiz_id
+          in: path
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                answers:
+                  type: array
+                  items:
+                    type: object
+                    properties:
+                      question_id: { type: integer }
+                      selected_option: { type: integer }
+      responses:
+        '200':
+          description: Score submitted
+
+  /summary:
+    get:
+      tags: [Reports]
+      summary: Get quiz summary data for admin
+      responses:
+        '200':
+          description: Summary data for charts
+
+  /export/user:
+    post:
+      tags: [Reports]
+      summary: Export user's quiz performance CSV
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                user_id: { type: integer }
+      responses:
+        '202':
+          description: Export started
+
+  /export/admin:
+    post:
+      tags: [Reports]
+      summary: Export admin overview CSV
+      responses:
+        '202':
+          description: Export started
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - bearerAuth: []
